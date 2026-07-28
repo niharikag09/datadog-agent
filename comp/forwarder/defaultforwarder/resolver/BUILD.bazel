@@ -25,7 +25,9 @@ go_test(
     embed = [":resolver"],
     gotags = ["test"],
     deps = [
+        "//comp/core/delegatedauth/mock",
         "//comp/core/log/mock",
+        "//comp/core/secrets/mock",
         "//comp/forwarder/defaultforwarder/endpoints",
         "//comp/forwarder/defaultforwarder/transaction",
         "//pkg/config/mock",
