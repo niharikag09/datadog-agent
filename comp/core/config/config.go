@@ -89,10 +89,8 @@ func newConfig(deps dependencies) (*cfg, error) {
 		// Snapshot already in the global builder; skip disk load to avoid
 		// clobbering streamed values via same-source last-write-wins.
 		//
-		// This still needs to configure delegated auth: the streamed snapshot can carry the same
-		// delegated-auth prefixes/DELA(...) directives a disk-loaded config would, but skipping
-		// setupConfig also skips the ConfigureDelegatedAuth call inside it, so a real
-		// delegatedauth.Component would otherwise never get any registered instances in this mode.
+		// Still call ConfigureDelegatedAuth: skipping setupConfig also skips its internal call,
+		// so a streamed snapshot's delegated-auth directives would otherwise never be registered.
 		if err := pkgconfigsetup.ConfigureDelegatedAuth(context.Background(), config, deps.DelegatedAuth); err != nil {
 			log.Errorf("Failed to configure delegated authentication for streamed config: %v. Agent will continue without delegated auth.", err)
 		}
@@ -117,12 +115,8 @@ func newConfig(deps dependencies) (*cfg, error) {
 			return returnErrFct(err)
 		}
 
-		// setupConfig (and the ConfigureDelegatedAuth call inside it) already ran above, before
-		// this merge, so a delegated-auth prefix or DELA(...) directive that only exists in
-		// security-agent.yaml (not the main datadog.yaml) was invisible to that first pass. Re-run
-		// it now that the merge is complete. AddInstance is keyed by APIKeyConfigKey and safely
-		// replaces an existing instance for the same key, so directives already registered on the
-		// first pass are re-applied rather than duplicated.
+		// Re-run now that security-agent.yaml is merged in, so delegated-auth directives that
+		// only exist there (not in the main datadog.yaml) get picked up too.
 		if err := pkgconfigsetup.ConfigureDelegatedAuth(context.Background(), config, deps.DelegatedAuth); err != nil {
 			log.Errorf("Failed to re-configure delegated authentication after merging security-agent config: %v. Agent will continue without delegated auth.", err)
 		}
