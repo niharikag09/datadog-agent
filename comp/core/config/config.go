@@ -22,6 +22,7 @@ import (
 	secretnooptypes "github.com/DataDog/datadog-agent/comp/core/secrets/noop-impl/types"
 	pkgconfigmodel "github.com/DataDog/datadog-agent/pkg/config/model"
 	pkgconfigsetup "github.com/DataDog/datadog-agent/pkg/config/setup"
+	"github.com/DataDog/datadog-agent/pkg/util/log"
 )
 
 // Reader is a subset of Config that only allows reading of configuration
@@ -87,6 +88,14 @@ func newConfig(deps dependencies) (*cfg, error) {
 	if deps.Cfgstream != nil && deps.Cfgstream.IsActive() {
 		// Snapshot already in the global builder; skip disk load to avoid
 		// clobbering streamed values via same-source last-write-wins.
+		//
+		// This still needs to configure delegated auth: the streamed snapshot can carry the same
+		// delegated-auth prefixes/DELA(...) directives a disk-loaded config would, but skipping
+		// setupConfig also skips the ConfigureDelegatedAuth call inside it, so a real
+		// delegatedauth.Component would otherwise never get any registered instances in this mode.
+		if err := pkgconfigsetup.ConfigureDelegatedAuth(context.Background(), config, deps.DelegatedAuth); err != nil {
+			log.Errorf("Failed to configure delegated authentication for streamed config: %v. Agent will continue without delegated auth.", err)
+		}
 		return &cfg{Config: config, warnings: warnings}, nil
 	}
 
@@ -106,6 +115,16 @@ func newConfig(deps dependencies) (*cfg, error) {
 	if deps.Params.configLoadSecurityAgent {
 		if err := pkgconfigsetup.Merge(deps.Params.securityAgentConfigFilePaths, config); err != nil {
 			return returnErrFct(err)
+		}
+
+		// setupConfig (and the ConfigureDelegatedAuth call inside it) already ran above, before
+		// this merge, so a delegated-auth prefix or DELA(...) directive that only exists in
+		// security-agent.yaml (not the main datadog.yaml) was invisible to that first pass. Re-run
+		// it now that the merge is complete. AddInstance is keyed by APIKeyConfigKey and safely
+		// replaces an existing instance for the same key, so directives already registered on the
+		// first pass are re-applied rather than duplicated.
+		if err := pkgconfigsetup.ConfigureDelegatedAuth(context.Background(), config, deps.DelegatedAuth); err != nil {
+			log.Errorf("Failed to re-configure delegated authentication after merging security-agent config: %v. Agent will continue without delegated auth.", err)
 		}
 	}
 
