@@ -7,6 +7,7 @@ package configfilesdiscoveryimpl
 
 import (
 	workloadmeta "github.com/DataDog/datadog-agent/comp/core/workloadmeta/def"
+	"github.com/DataDog/datadog-agent/pkg/util/log"
 )
 
 func (s *adScheduler) startProcessEventListener(events <-chan workloadmeta.EventBundle) {
@@ -58,8 +59,10 @@ func (s *adScheduler) retryProcessCollections(containerID string, args []string)
 		watch.processEventSeen = true
 		if !watch.processRetryReady || watch.inFlight {
 			watch.processRetryPending = true
+			log.Debugf("config files discovery deferred process-triggered retry for integration %q service %q until the current collection finishes", watch.integration, watch.serviceID)
 			continue
 		}
+		log.Debugf("config files discovery retrying collection for integration %q service %q after matching a live process command line", watch.integration, watch.serviceID)
 		s.enqueueCollectionLocked(watch)
 	}
 }

@@ -62,6 +62,7 @@ func (r *eventPlatformCollectedConfigSender) SendCollectedConfigs(configs []Coll
 	if err := r.forwarder.SendEventPlatformEvent(msg, eventplatform.EventTypeAgentDiscovery); err != nil {
 		return fmt.Errorf("send agent discovery payload to event platform: %w", err)
 	}
+	log.Debugf("config files discovery submitted Event Platform payload: collected_configs %d payload_bytes %d", len(payloads), len(payloadBytes))
 	return nil
 }
 

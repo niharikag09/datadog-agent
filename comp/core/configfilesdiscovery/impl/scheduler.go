@@ -258,6 +258,7 @@ func (s *adScheduler) Schedule(configs []integration.Config) {
 	for _, config := range configs {
 		target, ok := s.resolver.Resolve(config)
 		if !ok {
+			log.Debugf("config files discovery could not resolve target for integration %q service %q", config.Name, config.ServiceID)
 			continue
 		}
 
@@ -281,8 +282,9 @@ func (s *adScheduler) trackAndEnqueue(config integration.Config, target target) 
 
 	key := watchKey(config)
 	watch, ok := s.watches[key]
+	now := s.clock.Now()
 	if s.startupNotBefore.IsZero() {
-		s.startupNotBefore = s.clock.Now().Add(s.startupDelay)
+		s.startupNotBefore = now.Add(s.startupDelay)
 		if s.startupDelay > 0 {
 			s.startupTimer = s.clock.AfterFunc(s.startupDelay, s.enqueueDueCollections)
 		}
@@ -296,12 +298,21 @@ func (s *adScheduler) trackAndEnqueue(config integration.Config, target target) 
 	watch.integration = config.Name
 	watch.serviceID = config.ServiceID
 	watch.target = target
-	if !ok && s.clock.Now().Before(s.startupNotBefore) {
+	if !ok {
+		log.Debugf("config files discovery started watching integration %q service %q runtime %q runtime_id %q", watch.integration, watch.serviceID, watch.target.runtime, watch.target.entityID)
+	}
+	if !ok && now.Before(s.startupNotBefore) {
 		watch.nextCollection = s.startupNotBefore
+		log.Debugf("config files discovery delayed initial collection for integration %q service %q by %s", watch.integration, watch.serviceID, s.startupNotBefore.Sub(now))
 		return
 	}
 
-	if ok && (watch.inFlight || !watch.nextCollection.IsZero()) {
+	if ok && watch.inFlight {
+		log.Debugf("config files discovery refreshed watched target for integration %q service %q while collection is in progress", watch.integration, watch.serviceID)
+		return
+	}
+	if ok && !watch.nextCollection.IsZero() {
+		log.Debugf("config files discovery refreshed watched target for integration %q service %q while the next collection is already scheduled", watch.integration, watch.serviceID)
 		return
 	}
 	s.enqueueCollectionLocked(watch)
@@ -326,6 +337,7 @@ func (s *adScheduler) enqueueCollectionLocked(watch *watchedConfig) {
 	case <-s.ctx.Done():
 		watch.inFlight = false
 	case s.collectionQueue <- watch:
+		log.Debugf("config files discovery queued collection for integration %q service %q runtime %q", watch.integration, watch.serviceID, watch.target.runtime)
 	default:
 		watch.inFlight = false
 		watch.nextCollection = s.clock.Now().Add(s.nextRetryDelay())
@@ -367,18 +379,21 @@ func (s *adScheduler) runCollectionWorker() {
 			return true
 		}
 		stopFlushTimer()
+		rawConfigBytes := batch.rawConfigBytes
 		pendingConfigs := batch.takeConfigs()
 		configs := collectedConfigsFromPending(pendingConfigs)
+		log.Debugf("config files discovery sending collected config batch: collected_configs %d raw_config_bytes %d", len(configs), rawConfigBytes)
 		if err := s.sender.SendCollectedConfigs(configs); err != nil {
 			select {
 			case <-s.ctx.Done():
 				return false
 			default:
-				log.Warnf("failed to send collected config batch with %d collected configs: %v", len(configs), err)
+				log.Warnf("failed to send collected config batch with %d collected configs and %d raw config bytes: %v", len(configs), rawConfigBytes, err)
 				s.finishSend(pendingConfigs, false)
 				return true
 			}
 		}
+		log.Debugf("config files discovery sender accepted collected config batch: collected_configs %d raw_config_bytes %d", len(configs), rawConfigBytes)
 		s.finishSend(pendingConfigs, true)
 		return true
 	}
@@ -460,6 +475,7 @@ func (s *adScheduler) runCollection(watch *watchedConfig) (pendingCollectedConfi
 	if !ok {
 		return pendingCollectedConfig{}, false
 	}
+	log.Debugf("config files discovery starting collection for integration %q service %q runtime %q runtime_id %q", integration, serviceID, target.runtime, target.entityID)
 
 	readerFactory := s.readers[target.runtime]
 	reader, err := readerFactory(target)
@@ -484,7 +500,9 @@ func (s *adScheduler) runCollection(watch *watchedConfig) (pendingCollectedConfi
 	}
 
 	if len(collected.ConfigFiles) == 0 && len(collected.EnvVars) == 0 {
-		s.finishCollection(watch, s.clock.Now().Add(s.nextHeartbeatDelay()))
+		nextDelay := s.nextHeartbeatDelay()
+		log.Debugf("config files discovery collection produced no config data for integration %q service %q; next collection in %s", integration, serviceID, nextDelay)
+		s.finishCollection(watch, s.clock.Now().Add(nextDelay))
 		return pendingCollectedConfig{}, false
 	}
 	if !s.prepareCollectedConfig(watch, len(collected.ConfigFiles) > 0) {
@@ -498,9 +516,10 @@ func (s *adScheduler) runCollection(watch *watchedConfig) (pendingCollectedConfi
 		watch:  watch,
 		config: collected,
 	}
+	log.Debugf("config files discovery collected config data: integration %q service %q runtime %q runtime_id %q config_files %d env_vars %d raw_config_bytes %d", integration, serviceID, target.runtime, target.entityID, len(collected.ConfigFiles), len(collected.EnvVars), collectedConfigRawBytes(collected))
 
 	for _, file := range collected.ConfigFiles {
-		log.Debugf("config files discovery collected config file: integration %q path %q size_bytes %d truncated %t", pendingConfig.config.Integration, file.Path, len(file.Content), file.Truncated)
+		log.Debugf("config files discovery collected config file: integration %q service %q path %q size_bytes %d truncated %t", pendingConfig.config.Integration, serviceID, file.Path, len(file.Content), file.Truncated)
 	}
 	return pendingConfig, true
 }
@@ -624,7 +643,11 @@ func (s *adScheduler) Unschedule(configs []integration.Config) {
 	defer s.mu.Unlock()
 
 	for _, config := range configs {
-		delete(s.watches, watchKey(config))
+		key := watchKey(config)
+		if watch, found := s.watches[key]; found {
+			delete(s.watches, key)
+			log.Debugf("config files discovery stopped watching integration %q service %q runtime %q", watch.integration, watch.serviceID, watch.target.runtime)
+		}
 	}
 }
 
