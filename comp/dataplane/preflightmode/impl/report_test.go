@@ -38,6 +38,26 @@ func TestFindingsAreAllowlisted(t *testing.T) {
 	assert.ElementsMatch(t, expected, allFindings)
 }
 
+func TestOutcomeResult(t *testing.T) {
+	t.Run("no findings is clean", func(t *testing.T) {
+		assert.Equal(t, resultClean, (&outcome{}).result())
+	})
+
+	t.Run("the first finding wins", func(t *testing.T) {
+		o := &outcome{}
+		o.add(findingProbeFailed)
+		o.add(findingErrorsInLog)
+		assert.Equal(t, string(findingProbeFailed), o.result())
+	})
+
+	t.Run("findings are deduplicated", func(t *testing.T) {
+		o := &outcome{}
+		o.add(findingErrorsInLog)
+		o.add(findingErrorsInLog)
+		assert.Equal(t, []finding{findingErrorsInLog}, o.findings)
+	})
+}
+
 // TestTelemetryNamesAreStable pins the metric and label names for the same reason: they
 // are duplicated in the agent telemetry profile.
 func TestTelemetryNamesAreStable(t *testing.T) {

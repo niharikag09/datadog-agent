@@ -14,6 +14,38 @@ import (
 	telemetry "github.com/DataDog/datadog-agent/comp/core/telemetry/def"
 )
 
+// finding is a bounded enum describing one thing that went wrong during a preflight mode run.
+// Values are shipped as a telemetry label, so this set must stay small and must never
+// contain anything derived from ADP's output.
+type finding string
+
+const (
+	findingSpawnFailed   finding = "spawn_failed"    // ADP could not be started
+	findingProbeFailed   finding = "probe_failed"    // the probe metric never made it into ADP
+	findingExitedEarly   finding = "exited_early"    // ADP exited before we asked it to
+	findingStopTimeout   finding = "stop_timeout"    // ADP had to be killed
+	findingErrorsInLog   finding = "errors_in_log"   // ADP logged an error
+	findingWarningsInLog finding = "warnings_in_log" // ADP logged a warning we did not cause
+	findingOutputDropped finding = "output_dropped"  // the capture buffer overflowed
+	findingInterrupted   finding = "interrupted"     // the Agent shut down mid-run
+)
+
+// resultClean is the result label used when a run produced no findings at all.
+const resultClean = "clean"
+
+// allFindings exists so a test can assert the set has not grown without the agent telemetry
+// profile being updated to match.
+var allFindings = []finding{
+	findingSpawnFailed,
+	findingProbeFailed,
+	findingExitedEarly,
+	findingStopTimeout,
+	findingErrorsInLog,
+	findingWarningsInLog,
+	findingOutputDropped,
+	findingInterrupted,
+}
+
 // Metric and label names. These are duplicated in the agent telemetry profile in
 // comp/core/agenttelemetry/impl/defaultProfiles.yaml, where they must be allowlisted —
 // including each label — or nothing is shipped. TestTelemetryNamesAreStable is the tripwire.
@@ -39,7 +71,7 @@ const probeMetricName = "n_o_i_n_d_e_x.datadog.agent.data_plane.preflight_mode.p
 // outcome is everything a single preflight mode run produced.
 type outcome struct {
 	findings        []finding
-	lines           []scannedLine // classified ADP output; local only
+	records         []logRecord // parsed ADP output; local only
 	durationSeconds float64
 }
 
@@ -95,7 +127,7 @@ func newReporter(log logcomp.Component, tlm telemetry.Component) *reporter {
 // messages are logged locally — reachable in a flare — while the bounded counters carry the
 // signal that reaches Datadog.
 //
-// TODO(DADP-xxx): ship o.lines via agenttelemetry SendEvent once the event type is agreed.
+// TODO(DADP-xxx): ship o.records via agenttelemetry SendEvent once the event type is agreed.
 func (r *reporter) report(o *outcome) {
 	r.duration.Set(o.durationSeconds)
 	r.result.Inc(o.result())
@@ -114,7 +146,12 @@ func (r *reporter) report(o *outcome) {
 			o.durationSeconds, len(o.findings), strings.Join(names, ", "))
 	}
 
-	for _, l := range o.lines {
-		r.log.Warnf("Agent Data Plane preflight mode observed %s from %s: %s", l.Level, l.Target, l.Signature)
+	// Only the notable records are surfaced at this level. The rest were retained as context
+	// for them and are already in the Agent log at debug, where the capture mirrored them.
+	for _, rec := range o.records {
+		if !rec.notable() {
+			continue
+		}
+		r.log.Warnf("Agent Data Plane preflight mode observed %s from %s: %s", rec.Level, rec.Target, rec.Signature)
 	}
 }

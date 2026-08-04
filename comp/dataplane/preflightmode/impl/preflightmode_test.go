@@ -323,13 +323,25 @@ func (h *harness) runToCompletion(t *testing.T) {
 	h.lc.stop(t)
 }
 
-// captured returns the retained ADP output.
-func (h *harness) captured() []string {
+// captured returns the ADP log records retained so far.
+func (h *harness) captured() []logRecord {
 	if h.comp.out == nil {
 		return nil
 	}
-	lines, _ := h.comp.out.snapshot()
-	return lines
+	records, _ := h.comp.out.snapshot()
+	return records
+}
+
+// capturedContains reports whether any retained record's message contains sub. The retained
+// form is a scrubbed signature, so only substrings that survive scrubbing can be matched —
+// digits and paths in particular are collapsed.
+func (h *harness) capturedContains(sub string) bool {
+	for _, rec := range h.captured() {
+		if strings.Contains(rec.Signature, sub) {
+			return true
+		}
+	}
+	return false
 }
 
 // findingCount returns how many times a finding was reported.
@@ -389,15 +401,15 @@ func TestPreflightModeProbeReachesDataPlane(t *testing.T) {
 	h := newHarness(t, modeNormal, nil)
 	h.runToCompletion(t)
 
-	lines := h.captured()
+	records := h.captured()
 	var received string
-	for _, l := range lines {
-		if strings.Contains(l, probeMetricName) {
-			received = l
+	for _, rec := range records {
+		if strings.Contains(rec.Signature, probeMetricName) {
+			received = rec.Signature
 			break
 		}
 	}
-	require.NotEmptyf(t, received, "the probe metric never arrived at the data plane; captured: %v", lines)
+	require.NotEmptyf(t, received, "the probe metric never arrived at the data plane; captured: %v", records)
 	assert.Contains(t, received, "preflight_mode:true")
 	assert.Zero(t, h.findingCount(t, findingProbeFailed))
 }
@@ -474,14 +486,10 @@ func TestPreflightModeStopsGracefully(t *testing.T) {
 		"the stop signal must be one the data plane actually handles")
 
 	// The stand-in only logs this after handling the stop signal, so its presence proves
-	// the graceful path ran rather than the process being killed outright.
-	var shutdown bool
-	for _, l := range h.captured() {
-		if strings.Contains(l, "shut down successfully") {
-			shutdown = true
-		}
-	}
-	assert.True(t, shutdown, "the data plane did not shut down gracefully; captured: %v", h.captured())
+	// the graceful path ran rather than the process being killed outright. It is an INFO
+	// record, which is why the capture retains records below a warning as context.
+	assert.True(t, h.capturedContains("shut down successfully"),
+		"the data plane did not shut down gracefully; captured: %v", h.captured())
 }
 
 func TestPreflightModeNoListener(t *testing.T) {
@@ -552,12 +560,7 @@ func TestPreflightModeInterruptedStillReportsRealErrors(t *testing.T) {
 
 	h.lc.start(t)
 	require.Eventually(t, func() bool {
-		for _, l := range h.captured() {
-			if strings.Contains(l, "connection refused") {
-				return true
-			}
-		}
-		return false
+		return h.capturedContains("connection refused")
 	}, 30*time.Second, 100*time.Millisecond, "the data plane never logged its errors")
 
 	stopped := make(chan error, 1)
@@ -605,10 +608,8 @@ func TestPreflightModeStripsDDEnvFromChild(t *testing.T) {
 	h := newHarness(t, modeNormal, nil)
 	h.runToCompletion(t)
 
-	for _, l := range h.captured() {
-		assert.NotContains(t, l, "inherited a DD_ environment variable",
-			"the child saw a DD_ variable that sanitizedEnv should have stripped")
-	}
+	assert.False(t, h.capturedContains("inherited a DD_ environment variable"),
+		"the child saw a DD_ variable that sanitizedEnv should have stripped")
 	assert.Equal(t, resultClean, h.result(t))
 }
 
@@ -619,9 +620,7 @@ func TestPreflightModePassesRunSubcommand(t *testing.T) {
 	h := newHarness(t, modeNormal, nil)
 	h.runToCompletion(t)
 
-	for _, l := range h.captured() {
-		assert.NotContains(t, l, "missing the 'run' subcommand")
-	}
+	assert.False(t, h.capturedContains("missing the 'run' subcommand"))
 	assert.Equal(t, resultClean, h.result(t))
 }
 

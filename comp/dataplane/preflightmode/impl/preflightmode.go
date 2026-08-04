@@ -408,16 +408,16 @@ func (d *preflightModeComponent) run(ctx context.Context) {
 		o.add(findingProbeFailed)
 	}
 
-	lines, dropped := d.out.finish()
+	records, dropped := d.out.finish()
 	if dropped > 0 {
-		d.log.Warnf("Agent Data Plane preflight mode dropped %d output line(s) from its capture buffer", dropped)
+		d.log.Warnf("Agent Data Plane preflight mode dropped %d log record(s) from its capture buffer", dropped)
 		o.add(findingOutputDropped)
 	}
-	o.lines = scanOutput(lines)
-	if hasErrors(o.lines) {
+	o.records = records
+	if hasErrors(records) {
 		o.add(findingErrorsInLog)
 	}
-	if hasUnexpectedWarnings(o.lines) {
+	if hasUnexpectedWarnings(records) {
 		o.add(findingWarningsInLog)
 	}
 }
