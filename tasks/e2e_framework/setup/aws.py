@@ -9,7 +9,7 @@ from invoke.exceptions import Exit, UnexpectedExit
 
 from tasks.e2e_framework.config import Config
 from tasks.e2e_framework.setup.ssh_keys import KeyInfo, add_key_to_ssh_agent, default_key_paths
-from tasks.e2e_framework.tool import ask, ask_yesno, error, get_aws_cmd, info, is_windows, warn
+from tasks.e2e_framework.tool import ask, ask_yesno, error, get_aws_cmd, info, warn, write_secret_file
 
 SUPPORTED_KEY_TYPES = ["rsa", "ed25519"]
 AVAILABLE_AWS_ACCOUNTS = ["agent-sandbox", "sandbox", "tse-playground"]
@@ -274,11 +274,7 @@ def _aws_create_keypair(
     key_material = out.stdout.strip()
     # write private key to disk
     os.makedirs(Path(private_key_path).parent, exist_ok=True)
-    with open(private_key_path, "w") as f:
-        f.write(key_material)
-    if not is_windows():
-        os.chmod(private_key_path, 0o600)
-        # Windows permissions should be fine as is via inheritance
+    write_secret_file(private_key_path, key_material)
 
     # generate public key from private key
     cmd = f'ssh-keygen -f "{private_key_path}" -y'

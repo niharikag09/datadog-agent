@@ -3,6 +3,7 @@ import json
 import os
 import pathlib
 import platform
+import subprocess
 from io import StringIO
 from typing import Any
 
@@ -32,6 +33,53 @@ if is_windows():
         print(
             "colorama is not up to date, terminal colors may not work properly. Please run 'dda self dep sync' to fix this."
         )
+
+
+def restrict_file_to_owner(path: str | pathlib.Path) -> None:
+    """
+    Restrict a file holding secrets so only its owner can read it.
+
+    On Windows os.chmod only toggles the read-only attribute and leaves the ACL alone, so
+    the ACL has to be replaced outright: an ACE inherited from the user profile (sandboxing
+    and management tools grant themselves one) is enough to leave the file readable by other
+    principals, and OpenSSH refuses to load private keys in that state.
+    """
+    if not is_windows():
+        os.chmod(path, 0o600)
+        return
+    user = os.environ.get("USERNAME") or getpass.getuser()
+    # SIDs rather than names so this holds on non-English installs, and matching the ACL
+    # ssh-keygen writes natively: S-1-5-18 is SYSTEM, S-1-5-32-544 is Administrators.
+    subprocess.run(
+        [
+            "icacls",
+            str(path),
+            "/inheritance:r",
+            "/grant:r",
+            f"{user}:(F)",
+            "*S-1-5-18:(F)",
+            "*S-1-5-32-544:(F)",
+        ],
+        check=True,
+        capture_output=True,
+    )
+
+
+def write_secret_file(path: str | pathlib.Path, content: str) -> None:
+    """
+    Write text to a file that only its owner can read.
+
+    The file is created and locked down before the content lands in it. Restricting
+    afterwards would leave the secret readable for the duration of the write, which on
+    Windows is not theoretical: a fresh file under the user profile inherits whatever
+    read ACEs the profile carries.
+    """
+    # The opener applies the POSIX mode at creation time; "w" implies O_TRUNC, so an
+    # existing file with a weaker ACL is emptied before it is locked down rather than
+    # going on exposing its old contents throughout the rewrite.
+    with open(path, "w", opener=lambda p, flags: os.open(p, flags, 0o600)) as f:
+        restrict_file_to_owner(path)
+        f.write(content)
 
 
 def ask(question: str, color: str = "blue") -> str:

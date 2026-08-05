@@ -7,7 +7,7 @@ from typing import NamedTuple
 from invoke.context import Context
 from invoke.exceptions import UnexpectedExit
 
-from tasks.e2e_framework.tool import info, is_windows, warn
+from tasks.e2e_framework.tool import info, is_windows, restrict_file_to_owner, warn
 
 
 def ssh_fingerprint_to_bytes(fingerprint: str) -> bytes:
@@ -215,8 +215,7 @@ def generate_keypair_with_passphrase(
     passphrase = secrets.token_urlsafe(32)
     os.makedirs(Path(private_key_path).parent, exist_ok=True)
     ctx.run(f'ssh-keygen -t {key_type} -f "{private_key_path}" -N "{passphrase}" -C ""', hide=True)
-    if not is_windows():
-        os.chmod(private_key_path, 0o600)
+    restrict_file_to_owner(private_key_path)
     # ssh-keygen appends .pub to the private key path; rename to the desired public key path
     generated_pub = f"{private_key_path}.pub"
     if generated_pub != public_key_path:
