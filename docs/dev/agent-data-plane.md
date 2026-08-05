@@ -24,6 +24,7 @@ All of the following must hold:
 | `data_plane.preflight_mode` is `true` (the default) | The off switch, and the only knob preflight mode exposes. |
 | `data_plane.enabled` has not been set **at all** | An explicit `true` means ADP is already running for real and two instances would contend for the API, secure API and telemetry ports plus the DogStatsD socket. An explicit `false` means the operator does not want ADP running. Either way the operator has an opinion and preflight mode stays out of the way. Note the platform gate in `sanitizeDataPlaneConfig` sets this to `false` on unsupported platforms, which also disables preflight mode. |
 | The Agent flavor is the default Agent | Heroku and IoT share the same `run` command with fewer build tags and neither ships ADP. |
+| No secrets are in play | The pre-flight writes the resolved configuration to a file, so a secret the resolver only ever held in memory would be materialized in plaintext on disk. Skipped when `secret_backend_command`, `secret_backend_type` or `multi_secret_backends` is set, or when anything at all is sitting in the config's `secret` source layer. See `secretsInUse`. |
 | The ADP binary is on disk | Absent on Heroku packages and slim container images. Silently skipped — not reported. |
 
 It runs **once** per Agent start, not on a schedule, for a fixed 90 seconds.
@@ -78,11 +79,14 @@ agent-data-plane 1.4.0 rather than assumed — see
 The forwarder is **not** neutered: it uses the real `api_key`, `site` and proxy settings,
 because proxy, DNS and TLS problems are exactly the day-one failures being hunted.
 
-**The generated file therefore contains the Agent's entire resolved configuration, including
-every secret** — `AllSettings` merges the secrets layer, so secret-backend outputs such as
-`app_key`, proxy credentials, `additional_endpoints` keys and integration passwords are all
-present in plaintext, not just `api_key`. The directory is removed when the run finishes, and
-`stop` removes it again if the run does not unwind in time.
+**The generated file therefore contains the Agent's entire resolved configuration**, so every
+credential the Agent was handed in plain text — `api_key`, `app_key`, proxy credentials,
+`additional_endpoints` keys — is in it. Secret-backend output is not, and that is the reason
+for the secrets condition in [When it runs](#when-it-runs): `AllSettings` would merge the
+secrets layer, so rather than try to redact a config we do not fully understand (ADP reads
+settings the Core Agent's schema does not describe) the pre-flight simply does not run when
+secrets are in use. The directory is removed when the run finishes, and `stop` removes it
+again if the run does not unwind in time.
 
 How the file is restricted differs by platform, because the Go file mode is not portable:
 

@@ -113,11 +113,12 @@ func buildPreflightConfig(cfg pkgconfigmodel.Reader, l listener) map[string]any 
 
 // writePreflightConfig renders the preflight configuration into workDir and returns its path.
 //
-// The file holds the Agent's entire resolved configuration. That is every secret, not just
-// api_key: AllSettings merges the secrets layer, so secret-backend outputs such as app_key,
-// proxy credentials, additional_endpoints keys and integration passwords are all present in
-// plaintext. The working directory is removed when the run finishes, and again from stop if
-// the run does not unwind in time.
+// The file holds the Agent's entire resolved configuration, so every credential the Agent was
+// given in plain text -- api_key, app_key, proxy credentials, additional_endpoints keys -- ends
+// up in it. Not, however, anything from a secret backend: AllSettings would merge the secrets
+// layer, but isEligible refuses to run the pre-flight at all when secrets are in use, precisely
+// so that this file cannot be how a secret first reaches the disk. The working directory is
+// removed when the run finishes, and again from stop if the run does not unwind in time.
 //
 // The 0600 below is what restricts the file on Unix. It does nothing on Windows, where the
 // mode is not an access control mechanism at all; there the file is covered by the ACL

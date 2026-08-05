@@ -138,10 +138,8 @@ func NewComponent(reqs Requires) Provides {
 		return inert
 	}
 
-	if !isEligible(reqs.Config) {
-		reqs.Log.Debugf("Agent Data Plane preflight mode is not eligible to run: %s is %t and %s was set by %q",
-			DataPlanePreflightMode, reqs.Config.GetBool(DataPlanePreflightMode),
-			DataPlaneEnabled, reqs.Config.GetSource(DataPlaneEnabled))
+	if eligible, reason := isEligible(reqs.Config); !eligible {
+		reqs.Log.Debugf("Agent Data Plane preflight mode is not eligible to run: %s", reason)
 		return inert
 	}
 
@@ -206,12 +204,12 @@ func (d *preflightModeComponent) stop(context.Context) error {
 	case <-d.done:
 	case <-time.After(grace):
 		// The run is wedged. Its deferred cleanup will not have happened, and the generated
-		// config holds the resolved API key and every other resolved secret, so remove it
+		// config holds the api_key and every other credential in the Agent's configuration, so remove it
 		// here rather than letting it outlive the Agent.
 		d.log.Warnf("Agent Data Plane preflight mode did not unwind within %s; cleaning up its working directory", grace)
 		if dir := d.workDir(); dir != "" {
 			if err := os.RemoveAll(dir); err != nil {
-				d.log.Errorf("Could not remove %s, which holds resolved secrets: %v", dir, err)
+				d.log.Errorf("Could not remove %s, which holds the Agent's credentials: %v", dir, err)
 			}
 		}
 	}
@@ -294,34 +292,17 @@ func (d *preflightModeComponent) prepare() (*exec.Cmd, listener, error) {
 
 // secureWorkDir restricts the working directory to the Agent's own account.
 //
-// The mode arguments to MkdirAll and WriteFile are not portable: on Windows
-// syscall.Mkdir drops the mode entirely and syscall.Open uses it only to decide the
-// read-only attribute, so 0700/0600 there buy nothing and both objects simply inherit
-// whatever the parent grants. Under a default MSI install that parent is
-// C:\ProgramData\Datadog, whose ACL is already restricted to SYSTEM, Administrators and the
-// Agent user — but run_path is operator-configurable, and pointed anywhere else (a second
-// drive, C:\Temp) the inherited ACL is whatever that location grants, which for most paths
-// outside ProgramData includes Users. The generated config holds every resolved secret, so
-// it must not depend on where run_path happens to point.
+// This is a platform portable method, specifically handling both Unix (through normal permission bits / chmod) and
+// Windows (security IDs and what have you).
 //
-// Applying this to the directory rather than to each file is deliberate: the ACEs
-// RestrictAccessToUser installs are inheritable, so the config created inside is covered the
-// moment it exists, instead of spending a window on disk with the inherited ACL and being
-// tightened afterwards.
-//
-// This does not close the race on the directory itself, which exists with the inherited ACL
-// between MkdirAll and this call. Closing that needs the directory created with an explicit
-// security descriptor (as pkg/fleet/installer/paths.SecureCreateDirectory does); there is no
-// equivalent helper outside the installer module today.
-//
-// A variable so tests can force the failure path; nothing in production reassigns it.
+// Defined as a variable in order to allow for tests to manipulate it such that we can test its behavior.
 var secureWorkDir = func(dir string) error {
 	perms, err := filesystem.NewPermission()
 	if err != nil {
 		return fmt.Errorf("could not resolve the permissions to apply to %s: %w", dir, err)
 	}
-	// Fail rather than continue with a directory we could not restrict: writing the resolved
-	// secrets somewhere world-readable is worse than skipping the pre-flight.
+	// Fail rather than continue with a directory we could not restrict: writing the Agent's
+	// credentials somewhere world-readable is worse than skipping the pre-flight.
 	if err := perms.RemoveAccessToOtherUsers(dir); err != nil {
 		return fmt.Errorf("could not restrict access to %s: %w", dir, err)
 	}
@@ -335,7 +316,7 @@ func (d *preflightModeComponent) run(ctx context.Context) {
 		o.durationSeconds = time.Since(started).Seconds()
 		d.reporter.report(o)
 	}()
-	// The generated config holds resolved secrets, so it must not outlive the run.
+	// The generated config holds the Agent's credentials, so it must not outlive the run.
 	defer func() {
 		if err := os.RemoveAll(d.workDir()); err != nil {
 			d.log.Warnf("Could not clean up %s: %v", d.workDir(), err)

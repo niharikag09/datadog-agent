@@ -757,12 +757,12 @@ func TestPreflightModePrepareRestrictsWorkDir(t *testing.T) {
 	assert.Equal(t, os.FileMode(0700), dirInfo.Mode().Perm(),
 		"%s must not be reachable by group or other", workDir)
 	assert.Equal(t, os.FileMode(0600), cfgInfo.Mode().Perm(),
-		"%s holds every resolved secret", cfgPath)
+		"%s holds the Agent's credentials", cfgPath)
 }
 
 // TestPreflightModeAbortsWhenWorkDirCannotBeSecured pins the fail-closed behaviour: a directory we
-// could not restrict must stop the pre-flight, not merely be logged. Writing the resolved
-// secrets somewhere unprotected is worse than skipping the run.
+// could not restrict must stop the pre-flight, not merely be logged. Writing the Agent's
+// credentials somewhere unprotected is worse than skipping the run.
 func TestPreflightModeAbortsWhenWorkDirCannotBeSecured(t *testing.T) {
 	h := newHarness(t, modeNormal, nil)
 
