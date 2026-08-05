@@ -246,7 +246,7 @@ func TestFirstSecretSetting(t *testing.T) {
 	t.Run("no secrets", func(t *testing.T) {
 		cfg := configmock.New(t)
 
-		setting, found := firstSecretSetting(cfg)
+		found, setting := getFirstSecretSetting(cfg)
 		assert.False(t, found)
 		assert.Empty(t, setting)
 	})
@@ -255,7 +255,7 @@ func TestFirstSecretSetting(t *testing.T) {
 		cfg := configmock.New(t)
 		cfg.Set("hostname", "resolved-hostname", pkgconfigmodel.SourceSecret)
 
-		setting, found := firstSecretSetting(cfg)
+		found, setting := getFirstSecretSetting(cfg)
 		assert.True(t, found)
 		assert.Equal(t, "hostname", setting)
 	})
@@ -267,7 +267,7 @@ func TestFirstSecretSetting(t *testing.T) {
 
 		// AllKeysLowercased is sorted, so the lexicographically first of the two wins.
 		for range 5 {
-			setting, found := firstSecretSetting(cfg)
+			found, setting := getFirstSecretSetting(cfg)
 			assert.True(t, found)
 			assert.Equal(t, "api_key", setting)
 		}
