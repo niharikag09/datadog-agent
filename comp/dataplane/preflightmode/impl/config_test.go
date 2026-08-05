@@ -128,6 +128,36 @@ func TestBuildPreflightConfigOverrides(t *testing.T) {
 	requireEq(t, got, "dogstatsd_non_local_traffic", false)
 }
 
+// TestBuildPreflightConfigShrinksFootprint covers the settings that exist only to keep the
+// preflight process small. Each one is a buffer or cache ADP allocates up front and holds for the
+// whole run, sized by default for production traffic that a one-metric pre-flight never sends.
+//
+// Asserted against an operator who raised every one of them, because that is the case where the
+// overrides earn their keep: without them a host tuned for a large DogStatsD workload pays that
+// tuning again, in a second process, on every Agent start.
+func TestBuildPreflightConfigShrinksFootprint(t *testing.T) {
+	cfg := configmock.New(t)
+	cfg.Set("dogstatsd_buffer_size", 65536, pkgconfigmodel.SourceFile)
+	cfg.Set("dogstatsd_string_interner_size", 131072, pkgconfigmodel.SourceFile)
+
+	got := buildPreflightConfig(cfg, newListener(t.TempDir()))
+
+	requireEq(t, got, "dogstatsd_buffer_size", 512)
+	requireEq(t, got, "dogstatsd_string_interner_size", 1)
+	requireEq(t, got, "dogstatsd_buffer_count", 2)
+	requireEq(t, got, "dogstatsd_buffer_count_max", 2)
+	requireEq(t, got, "data_plane.serializer_zstd_compressor_level", 1)
+
+	// Load-bearing alongside the one-entry interner: a 512-byte interner will not hold the probe
+	// metric's name and tags, and ADP drops metrics whose context it cannot intern unless heap
+	// allocation is permitted. Leaving this at its default of true is what keeps shrinking the
+	// interner from silently defeating the probe, so it must not be overridden to false.
+	if v, ok := get(t, got, "dogstatsd_allow_context_heap_allocs"); ok {
+		assert.NotEqual(t, false, v,
+			"a 512-byte interner cannot hold the probe metric's context, so heap allocation has to stay available")
+	}
+}
+
 // TestBuildPreflightConfigOverridesOperatorLogging matters because the operator's own logging
 // settings would otherwise defeat the scan: a file-logging ADP would write next to the real
 // agent-data-plane.log, a non-JSON ADP would not be parseable, and a debug-level ADP would
@@ -187,7 +217,7 @@ func TestOverrideKeysAreKnown(t *testing.T) {
 func TestDataPlaneOnlyOverridesStaySmall(t *testing.T) {
 	cfg := configmock.New(t)
 
-	assert.Len(t, preflightModeDataPlaneOnlyOverrides, 1,
+	assert.Len(t, preflightModeDataPlaneOnlyOverrides, 3,
 		"adding an unvalidatable override needs a note on why it cannot live in preflightModeGlobalOverrides")
 	for k := range preflightModeDataPlaneOnlyOverrides {
 		assert.Falsef(t, cfg.IsKnown(k),
@@ -361,4 +391,35 @@ func TestSanitizedEnvStripsDDVars(t *testing.T) {
 func TestSanitizedEnvEdgeCases(t *testing.T) {
 	// Entries shorter than the prefix must not panic on the slice.
 	assert.Equal(t, []string{"A", "", "DD"}, sanitizedEnv([]string{"A", "", "DD", "DD_X=1"}))
+}
+
+// TestChildEnvAppliesOverrides checks that childEnv layers the footprint overrides on top of the
+// DD_-stripped environment, and keeps the rest of it intact.
+func TestChildEnvAppliesOverrides(t *testing.T) {
+	got := childEnv([]string{"PATH=/usr/bin", "DD_API_KEY=secret"})
+
+	assert.Equal(t, []string{"PATH=/usr/bin", "TOKIO_WORKER_THREADS=2"}, got)
+}
+
+// TestChildEnvReplacesInheritedOverrides is the point of childEnv doing its own removal rather than
+// just appending: an Agent started with TOKIO_WORKER_THREADS already set would otherwise hand ADP
+// two assignments for it, leaving the pre-flight's runtime size up to how os/exec happens to
+// resolve duplicates.
+func TestChildEnvReplacesInheritedOverrides(t *testing.T) {
+	got := childEnv([]string{
+		"TOKIO_WORKER_THREADS=64",
+		// Windows environment lookups are case-insensitive, so a lowercase spelling would still
+		// reach ADP as the real variable and has to be removed too.
+		"tokio_worker_threads=64",
+		"PATH=/usr/bin",
+	})
+
+	assert.Equal(t, []string{"PATH=/usr/bin", "TOKIO_WORKER_THREADS=2"}, got)
+}
+
+func TestChildEnvEdgeCases(t *testing.T) {
+	// An entry with no "=" is not an assignment, so it is not one of the overrides and must
+	// survive rather than being matched on a prefix of the name.
+	assert.Equal(t, []string{"TOKIO_WORKER_THREADS_EXTRA=1", "TOKIO", "TOKIO_WORKER_THREADS=2"},
+		childEnv([]string{"TOKIO_WORKER_THREADS_EXTRA=1", "TOKIO"}))
 }

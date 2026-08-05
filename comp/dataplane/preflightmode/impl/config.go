@@ -31,6 +31,15 @@ const (
 var preflightModeDataPlaneOnlyOverrides = map[string]any{
 	// Do not contact the Core Agent at all, for either registration or configuration.
 	"data_plane.standalone_mode": true,
+
+	// Shrink the DogStatsD packet buffer pool to the smallest pool that can still receive.
+	//
+	// ADP builds dogstatsd_buffer_count buffers of dogstatsd_buffer_size bytes at startup and holds them for the life
+	// of the process, so the default of 128 reserves a megabyte to absorb bursts the pre-flight never produces. One is
+	// the floor rather than zero: the pool's permit semaphore is seeded from this value, so a zero-buffer pool would
+	// block the first acquire forever.
+	"dogstatsd_buffer_count":     2,
+	"dogstatsd_buffer_count_max": 2,
 }
 
 // preflightModeGlobalOverrides lists the Core Agent settings that should be overridden in ADP's
@@ -77,6 +86,30 @@ var preflightModeGlobalOverrides = map[string]any{
 	"dogstatsd_stream_socket":           "",
 	"dogstatsd_non_local_traffic":       false,
 	"dogstatsd_metrics_stats_enable":    false,
+
+	// Shrink the DogStatsD receive buffer and the context string interner down to the one metric the pre-flight
+	// actually sends.
+	//
+	// Both are allocated up front and sized for production traffic. The interner reserves
+	// dogstatsd_string_interner_size * 512 bytes, so its default of 4096 entries holds 2 MiB for the whole run, and the
+	// probe metric is a single line well under 512 bytes.
+	//
+	// One interner entry is 512 bytes, which the probe metric's name and tags may well overflow. That is fine, and is
+	// why dogstatsd_allow_context_heap_allocs is left at its default of true: a full interner falls back to allocating
+	// on the heap rather than dropping the metric, so the probe still gets through.
+	"dogstatsd_buffer_size":          512,
+	"dogstatsd_string_interner_size": 1,
+
+	// Compress with zstd level 1 rather than ADP's default of 3.
+	//
+	// The level determines the compression window, and a context sized for that window is allocated for each of the two
+	// metrics request builders, series and sketches. Level 1's window is a quarter of level 3's.
+	//
+	// Deliberately the data_plane. key and not the Core Agent's own serializer_zstd_compressor_level, which is a
+	// separate setting with a separate default that ADP classifies as only partially supported. Setting that one would
+	// make ADP log a warning about it, and the log scan reports unexpected warnings as a finding -- so it would put a
+	// permanent false positive under the primary signal on every run.
+	"data_plane.serializer_zstd_compressor_level": 1,
 }
 
 // buildPreflightConfig returns the configuration ADP should run with during a preflight mode
@@ -85,7 +118,8 @@ var preflightModeGlobalOverrides = map[string]any{
 // The full Agent configuration as it exists at the time of this call is used as the base,
 // and overrides are applied on top of it: this ensures that ADP is configured as close as possible
 // to how it would be when running normally, with only the necessary changes to run it in "preflight" mode:
-// don't take over DSD, don't run any other pipelines, don't log to disk, etc.
+// don't take over DSD, don't run any other pipelines, don't log to disk, and don't reserve buffer pools
+// sized for traffic that a one-metric pre-flight will never see.
 func buildPreflightConfig(cfg pkgconfigmodel.Reader, l listener) map[string]any {
 	out := cfg.AllSettings()
 	if out == nil {

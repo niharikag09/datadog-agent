@@ -128,6 +128,13 @@ func runFakeDataPlane() int {
 			return 3
 		}
 	}
+	// The footprint overrides reach the real binary the same way, so report the one the tests can
+	// observe. Read rather than scanned, so an inherited duplicate that childEnv failed to remove
+	// shows up here as whichever value the exec actually resolved to.
+	if got := os.Getenv("TOKIO_WORKER_THREADS"); got != "2" {
+		adpLog(os.Stderr, "ERROR", "fake_adp", "TOKIO_WORKER_THREADS is "+got+", expected 2")
+		return 3
+	}
 
 	mode := os.Getenv(fakeModeVar)
 	if mode == "" {
@@ -610,6 +617,23 @@ func TestPreflightModeStripsDDEnvFromChild(t *testing.T) {
 
 	assert.False(t, h.capturedContains("inherited a DD_ environment variable"),
 		"the child saw a DD_ variable that sanitizedEnv should have stripped")
+	assert.Equal(t, resultClean, h.result(t))
+}
+
+// TestPreflightModeCapsChildWorkerThreads is the end-to-end half of childEnv.
+//
+// Tokio reads TOKIO_WORKER_THREADS itself, so this is the only way the pre-flight can keep ADP's
+// runtime — and therefore its idle footprint — from scaling with the host's core count. The
+// inherited value is deliberately larger: it proves childEnv replaces rather than shadows, which a
+// unit test on the returned slice cannot show, because whether a duplicate wins is up to the exec.
+func TestPreflightModeCapsChildWorkerThreads(t *testing.T) {
+	t.Setenv("TOKIO_WORKER_THREADS", "64")
+
+	h := newHarness(t, modeNormal, nil)
+	h.runToCompletion(t)
+
+	assert.False(t, h.capturedContains("TOKIO_WORKER_THREADS is"),
+		"the child ran with a worker thread count other than the one childEnv sets")
 	assert.Equal(t, resultClean, h.result(t))
 }
 

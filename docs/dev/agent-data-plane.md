@@ -64,11 +64,31 @@ with, plus these overrides:
   deletes. Zeroing the size is the only thing that stops it: clearing the path instead makes
   ADP fall back to `run_path` + `transactions_to_retry` and land on the same tree, and a path
   that really is empty makes ADP log at `ERROR`, which the log scan would report as a finding.
+- **Footprint**: the buffers and caches ADP allocates up front are sized for the one metric the
+  pre-flight sends rather than for production traffic, so the second process the Agent starts on
+  every boot is not paying for capacity it will never use. `dogstatsd_buffer_size: 512` and
+  `dogstatsd_buffer_count`/`_max: 2` shrink the packet buffer pool ADP builds at startup (a
+  megabyte by default); `dogstatsd_string_interner_size: 1` shrinks the context string interner
+  from 2 MiB to 512 bytes; `data_plane.serializer_zstd_compressor_level: 1` shrinks the
+  compression window, and with it the context allocated per metrics request builder.
+  `dogstatsd_allow_context_heap_allocs` is deliberately left at its default of `true` — a
+  512-byte interner will not hold the probe metric's context, and heap fallback is what keeps
+  that from dropping the metric outright.
 - **Environment**: every `DD_*` variable is stripped from the child's environment. ADP
   layers environment over its config file, so an inherited `DD_DOGSTATSD_PORT` would make
   the preflight process bind the real endpoint and steal traffic from the Core Agent. The match
   is case-insensitive: Windows environment lookups are, so a `dd_dogstatsd_port` left in
-  place would still reach ADP as the real override.
+  place would still reach ADP as the real override. `TOKIO_WORKER_THREADS=2` is then set (see
+  `childEnv`): Tokio reads it directly rather than through ADP's configuration, and without it
+  ADP sizes its runtime from the host's core count, so its idle footprint grows with the
+  machine. Any inherited value is replaced, not shadowed.
+
+Both of the last two bullets are a deliberate trade of coverage for footprint: the preflight
+process is not running the buffer sizes or the runtime shape that ADP runs with for real, so a
+problem that only appears under production sizing — a pool that is too small under load, or a
+deadlock that needs a worker per core — will not show up in a pre-flight. What the pre-flight is
+for is the environment-specific failures that happen before any of that matters: a binary that
+will not start, a socket it cannot bind, an API key the backend rejects.
 
 Core Agent-only settings are passed through rather than stripped. ADP ignores keys it does
 not recognise, and it drives its OTLP surfaces from `data_plane.otlp.*` rather than the
@@ -263,6 +283,7 @@ openssl rand -hex 32 > $W/auth_token
 # Keep the socket on a container-local tmpfs: a bind mount cannot be chmod'ed on macOS,
 # and ADP fails the bind with a bare "Invalid argument".
 docker run -d --name adppreflight -v $W:/adpconf:ro --tmpfs /adprun:rw,mode=0700 \
+  -e TOKIO_WORKER_THREADS=2 \
   registry.datadoghq.com/agent-data-plane:1.4.0 --config /adpconf/datadog.yaml run
 
 docker logs -f adppreflight                      # JSON records, one per line

@@ -284,7 +284,7 @@ func (d *preflightModeComponent) prepare() (*exec.Cmd, listener, error) {
 	// cannot interleave mid-line, and Wait only returns once all output has been copied.
 	cmd.Stdout = d.out
 	cmd.Stderr = d.out
-	cmd.Env = sanitizedEnv(os.Environ())
+	cmd.Env = childEnv(os.Environ())
 	// On Linux, have the kernel kill ADP if the Agent dies without running its own cleanup.
 	cmd.SysProcAttr = preflightProcAttr()
 	return cmd, l, nil
@@ -510,4 +510,57 @@ func sanitizedEnv(env []string) []string {
 		out = append(out, kv)
 	}
 	return out
+}
+
+// preflightEnvOverrides are the variables the pre-flight sets on ADP to hold its idle footprint
+// down. A slice rather than a map so the emitted environment is deterministic.
+//
+// These live here rather than in the generated config because they are not settings ADP reads from
+// its configuration at all.
+var preflightEnvOverrides = []struct{ key, value string }{
+	// Cap ADP's async runtime at two worker threads.
+	//
+	// Tokio otherwise sizes its pool from the available parallelism, so on a large host ADP spawns
+	// a worker per core and its idle footprint scales with the core count: a stack plus a
+	// per-thread allocator cache each. Pinning the count makes the pre-flight's footprint
+	// independent of the host it runs on, and two workers is ample for pushing one metric through.
+	//
+	// This is knowingly not the runtime shape ADP runs with in production, so a problem that only
+	// appears with a worker per core will not show up here. The pre-flight gives up that coverage
+	// for a predictable footprint on every host in the fleet.
+	{key: "TOKIO_WORKER_THREADS", value: "2"},
+}
+
+// childEnv builds the environment for the preflight ADP process: the Agent's own environment with
+// the DD_ namespace stripped, plus preflightEnvOverrides.
+//
+// Inherited copies of the overridden variables are dropped rather than left to be shadowed. os/exec
+// resolves duplicate keys in favor of the last entry, so appending alone would work, but relying on
+// that would make the child's runtime depend on a detail of os/exec rather than on this function.
+// The match is case-insensitive for the same reason sanitizedEnv's is: Windows environment lookups
+// are, so an inherited lowercase spelling would still reach ADP as the real variable.
+func childEnv(env []string) []string {
+	out := make([]string, 0, len(env)+len(preflightEnvOverrides))
+	for _, kv := range sanitizedEnv(env) {
+		if !isOverriddenEnv(kv) {
+			out = append(out, kv)
+		}
+	}
+	for _, o := range preflightEnvOverrides {
+		out = append(out, o.key+"="+o.value)
+	}
+	return out
+}
+
+// isOverriddenEnv reports whether an environment entry names a variable preflightEnvOverrides sets.
+func isOverriddenEnv(kv string) bool {
+	// An entry with no "=" is not a variable assignment; treat the whole thing as the name so a
+	// malformed entry can never be mistaken for one of the overrides.
+	key, _, _ := strings.Cut(kv, "=")
+	for _, o := range preflightEnvOverrides {
+		if strings.EqualFold(key, o.key) {
+			return true
+		}
+	}
+	return false
 }
