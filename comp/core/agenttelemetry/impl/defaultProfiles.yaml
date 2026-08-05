@@ -560,8 +560,8 @@ profiles:
       - name: data_plane.preflight_mode_result
         preserve_tags:
           - result
-      # The finding label values are the constants in comp/dataplane/preflightmode/impl/logscan.go;
-      # TestFindingsAreAllowlisted there is the tripwire for that set changing.
+      # See `TestFindingsAreAllowlisted` in `comp/dataplane/preflightmode/impl/capture.go` for the fixed set
+      # of values that we except to have for the `finding` tag.
       - name: data_plane.preflight_mode_finding
         preserve_tags:
           - finding

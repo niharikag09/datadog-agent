@@ -56,7 +56,7 @@ const (
 
 // logRecord is one log event from ADP, in the form the capture retains.
 //
-// The json tags describe ADP's NDJSON format and a line is unmarshalled straight into the
+// The JSON tags describe ADP's NDJSON format and a line is unmarshalled straight into the
 // retained form: parseRecord rewrites Level into a normalized level and the message into a
 // bounded signature in place, so there is no separate wire type and no copy between the two.
 // A real record (agent-data-plane 1.4.0, log_format_json: true):
