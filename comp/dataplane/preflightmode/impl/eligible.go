@@ -34,7 +34,7 @@ import (
 // in.
 func isEligible(config pkgconfigmodel.Reader) (bool, string) {
 	if !config.GetBool(DataPlanePreflightMode) {
-		return false, fmt.Sprintf("%s is false", DataPlanePreflightMode)
+		return false, DataPlanePreflightMode + " is false"
 	}
 
 	dataPlaneEnabled := config.GetBool(DataPlaneEnabled)
@@ -76,11 +76,11 @@ const (
 func secretsInUse(config pkgconfigmodel.Reader) (bool, string) {
 	for _, setting := range []string{secretBackendCommand, secretBackendType} {
 		if config.GetString(setting) != "" {
-			return true, fmt.Sprintf("%s is set", setting)
+			return true, setting + " is set"
 		}
 	}
 	if len(config.GetStringMap(multiSecretBackends)) > 0 {
-		return true, fmt.Sprintf("%s is set", multiSecretBackends)
+		return true, multiSecretBackends + " is set"
 	}
 	if found, setting := getFirstSecretSetting(config); found {
 		return true, fmt.Sprintf("detected setting (%s) in secrets source layer", setting)
