@@ -804,7 +804,7 @@ func (e *engine) completeDueBaselines(dataSec int64) {
 }
 
 func (e *engine) completeBaseline(detectorName string, upToSec int64) {
-	newHashes, windowAnomalyCount, allComplete := e.baseline.complete(detectorName)
+	newHashes, snapshotChanged, windowAnomalyCount, allComplete := e.baseline.complete(detectorName)
 
 	needRefs := e.baseline.config.MuteNoisyMetrics || e.baseline.config.Verbose
 	var refs []observerdef.SeriesRef
@@ -826,17 +826,18 @@ func (e *engine) completeBaseline(detectorName string, upToSec int64) {
 
 	totalSeries := e.storage.TotalSeriesCount("")
 
-	// Emit before removal so testbench sinks can read metadata. The snapshot is
-	// cloned because the ingress filter reads it concurrently with later window
-	// completions mutating the controller's union.
+	// Emit before removal so testbench sinks can read metadata. The controller
+	// uses copy-on-write snapshots, so this immutable union can be published to
+	// concurrent ingress handlers without another full-map copy.
 	e.emit(engineEvent{
 		kind:      eventBaselineCompleted,
 		timestamp: upToSec,
 		baselineCompleted: &baselineCompletedEvent{
-			detectorName: detectorName,
-			mutedHashes:  cloneMutedHashes(e.baseline.mutedHashes),
-			mutedRefs:    refs,
-			allComplete:  allComplete,
+			detectorName:    detectorName,
+			mutedHashes:     e.baseline.mutedHashes,
+			snapshotChanged: snapshotChanged,
+			mutedRefs:       refs,
+			allComplete:     allComplete,
 		},
 	})
 
